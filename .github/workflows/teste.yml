@@ -1,0 +1,58 @@
+# Teste automático: monta e liga o CodeLens no GitHub e confere se
+# criar projeto, salvar e ler arquivo funcionam. Verde = está tudo certo.
+name: Testar o CodeLens
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  testar:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v5
+      - name: Instalar o Node 22
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Instalar as peças
+        run: npm install --no-audit --no-fund
+      - name: Montar a tela
+        run: npm run build
+      - name: Ligar o servidor e testar
+        env:
+          PORT: "8080"
+          NODE_ENV: production
+        run: |
+          npm start > servidor.log 2>&1 &
+          for i in $(seq 1 60); do curl -sf http://localhost:8080/api/healthz && break; sleep 1; done
+          echo "--- 1. servidor responde"
+          curl -sf http://localhost:8080/api/healthz
+          echo; echo "--- 2. a tela abre"
+          curl -sf http://localhost:8080/ | grep -q '<div id="root">'
+          echo "ok"
+          echo "--- 3. criar projeto"
+          ID=$(curl -sf -X POST -H 'Content-Type: application/json' -d '{"name":"teste","template":"blank"}' http://localhost:8080/api/projects/blank | node -pe 'JSON.parse(require("fs").readFileSync(0)).id')
+          echo "projeto $ID"
+          echo "--- 4. salvar arquivo"
+          curl -sf -X PUT -H 'Content-Type: application/json' -d '{"path":"pasta/ola.txt","content":"Ola, Maikon! teste"}' "http://localhost:8080/api/projects/$ID/files"
+          echo; echo "--- 5. ler arquivo"
+          curl -sf "http://localhost:8080/api/projects/$ID/files?path=pasta/ola.txt" | grep -q "Maikon"
+          echo "ok"
+          echo "--- 6. terminal"
+          curl -sf -X POST -H 'Content-Type: application/json' -d '{"command":"node -v"}' "http://localhost:8080/api/projects/$ID/exec"
+          echo; echo "--- 7. lista de projetos"
+          curl -sf http://localhost:8080/api/projects
+          echo; echo "--- 8. rota que não existe responde JSON (não HTML)"
+          curl -s http://localhost:8080/api/nao-existe | grep -q '"error"'
+          echo "ok"
+          echo; echo "TUDO CERTO ✅"
+      - name: Mostrar o registro do servidor
+        if: always()
+        run: cat servidor.log || true
